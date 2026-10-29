@@ -1,0 +1,52 @@
+Data fields
+'encounter_id' unique identifier of an encounter
+'patient_nbr' unique identifier of a patient
+'race' patient race
+'gender' patient gender
+'age' patient aged (binned in intervals of 10 years)
+'weight' weight in pounds
+'admission_type_id' type of admission in the hospital
+'discharge_disposition_id' reason for discharge
+'admission_source_id' source of admission
+'time_in_hospital' number of days between admission and discharge
+'payer_code' identifier for type of insurance/payment
+'medical_specialty' specialty of the admitting physician
+'num_lab_procedures' number of lab tested performed during encounter
+'num_procedures' numbver of procedures (other than lab tests) during encounter
+'num_medications' number of distinct medications administered during the encounter
+'number_outpatient' number of outpatient visits on the year preceding the encounter
+'number_emergency' number of emergency visits in the year preceding the encouunter
+'number_inpatient' number of inpatient visits in the year preceding the encounter
+'diag_1' primary diagnosis
+'diag_2' secondary diagnosis
+'diag_3' additional secondary diagnosis
+'number_diagnoses' number of diagnoses entered in the system
+'max_glu_serum' glucose serum test result
+'A1Cresult'  A1c test result
+The following 24 features indicate changes in dosage of 24 distinct medications:
+'metformin'
+'repaglinide'
+'nateglinide'
+'chlorpropamide'
+'glimepiride'
+'acetohexamide'
+'glipizide'
+'glyburide'
+'tolbutamide'
+'pioglitazone'
+'rosiglitazone'
+'acarbose'
+'miglitol'
+'troglitazone'
+'tolazamide'
+'examide'
+'citoglipton'
+'insulin'
+'glyburide-metformin'
+'glipizide-metformin'
+'glimepiride-pioglitazone'
+'metformin-rosiglitazone'
+'metformin-pioglitazone'
+'change'  if there was change in the patient's diabetes medication
+'diabetesMed' if diabetes medication was prescribed
+'readmitted' the target variable: either "NO", "<30" or ">30"
