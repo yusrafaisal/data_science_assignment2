@@ -102,6 +102,9 @@ NUMERIC = [
     "num_procedures", "num_medications", "number_outpatient",
     "number_emergency", "number_inpatient", "number_diagnoses",
     "n_meds_changed", "n_meds_steady",
+    "a1c_tested",        
+    "glucose_tested",    
+    "a1c_abnormal",         
 ]
 
 CATEGORICAL = [
@@ -133,6 +136,7 @@ FEATURE_COLS = [
     "glimepiride-pioglitazone", "metformin-rosiglitazone", "metformin-pioglitazone",
     "change", "diabetesMed",
     "n_meds_changed", "n_meds_steady",
+    "a1c_tested", "glucose_tested", "a1c_abnormal",             
 ]
 
 
@@ -194,6 +198,10 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 
     # Fill missing medical_specialty
     df["medical_specialty"] = df["medical_specialty"].fillna("Unknown")
+
+    df["a1c_tested"]     = df["A1Cresult"].notna().astype(int)
+    df["glucose_tested"] = df["max_glu_serum"].notna().astype(int)
+    df["a1c_abnormal"]   = (df["A1Cresult"].isin([">7", ">8"])).astype(int)
 
     return df[FEATURE_COLS]
 

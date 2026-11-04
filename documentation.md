@@ -243,8 +243,8 @@ This preserves the ordering so the model can use age as a continuous-ish variabl
 | encounter_id | ID | Drop | Not predictive, assignment rule |
 | patient_nbr | ID | Drop as feature | Not predictive, assignment rule |
 | weight | 97% missing | Drop | Too sparse |
-| max_glu_serum | 95% missing | Drop | Too sparse |
-| A1Cresult | 83% missing | Drop | Too sparse |
+| max_glu_serum | 95% missing | → glucose_tested binary flag | Extract signal from missingness |
+| A1Cresult | 83% missing | → a1c_tested, a1c_abnormal flags | Extract signal from missingness and value |
 | payer_code | 40% missing | Drop | Low signal |
 | age | String bracket | → age_num (0–9) | Preserve ordering |
 | diag_1/2/3 | 700+ ICD codes | → _group (9 categories) | Reduce cardinality |
@@ -253,13 +253,14 @@ This preserves the ordering so the model can use age as a continuous-ish variabl
 | admission_source_id | Integer ID | → text description | Make meaningful |
 | medical_specialty | 49% missing | Fill NaN → "Unknown" | Still useful |
 | 23 med columns | Sparse No/Up/Down | Keep + add n_meds_changed, n_meds_steady | Capture dosage pattern |
+| A1Cresult, max_glu_serum | 83–95% missing | → a1c_tested, glucose_tested, a1c_abnormal | Signal from missingness |
 | race, gender | Small % missing | Fill NaN → "Unknown" in pipeline | Handled by imputer |
 
 ---
 
 ## 5. Feature Engineering
 
-Two new columns created from existing data:
+Five new columns created from existing data:
 
 **n_meds_changed:** Number of medications where dosage was actively changed (Up or Down). A high number means the clinical team was actively adjusting the patient's regimen, which may indicate unstable control.
 
@@ -269,6 +270,20 @@ Two new columns created from existing data:
 df["n_meds_changed"] = (df[MED_COLS].isin(["Up", "Down"])).sum(axis=1)
 df["n_meds_steady"]  = (df[MED_COLS] == "Steady").sum(axis=1)
 ```
+
+**a1c_tested:** Binary flag — was an A1C test even ordered during this visit? `A1Cresult` is 83% missing, but the missingness itself is informative. Patients whose A1C was not tested may reflect different care pathways or less thorough monitoring.
+
+**glucose_tested:** Binary flag — was a glucose serum test ordered? `max_glu_serum` is 95% missing, same logic as above.
+
+**a1c_abnormal:** Binary flag — was the A1C result abnormal (>7 or >8), indicating poorly controlled diabetes? This directly captures whether the patient's diabetes was under control at discharge.
+
+```python
+df["a1c_tested"]     = df["A1Cresult"].notna().astype(int)
+df["glucose_tested"] = df["max_glu_serum"].notna().astype(int)
+df["a1c_abnormal"]   = (df["A1Cresult"].isin([">7", ">8"])).astype(int)
+```
+
+These three features let us extract signal from columns that are otherwise too sparse to use directly. Rather than dropping them entirely or imputing them, we turn their missingness and values into binary indicators the model can learn from.
 
 ---
 
@@ -322,42 +337,50 @@ We trained three models and compared them on the validation set.
 
 ### Model 1: Logistic Regression
 ```python
-LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42)
+LogisticRegression(class_weight="balanced", max_iter=2000, random_state=42)
 ```
 - Simplest possible model — draws a linear decision boundary
 - `class_weight="balanced"` — automatically gives more weight to the minority class (readmitted=1) to compensate for the 11% imbalance
+- `max_iter=2000` — increased from default 1000 to ensure full convergence
 - Used as our **baseline** — if fancier models can't beat this, something is wrong with them
 - Pros: fast, interpretable, easy to explain
 - Cons: assumes a linear relationship between features and outcome — unlikely to capture complex medical patterns
 
 ### Model 2: Random Forest
 ```python
-RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
+RandomForestClassifier(n_estimators=200, class_weight="balanced", max_depth=15,
+                       min_samples_leaf=10, random_state=42, n_jobs=-1)
 ```
-- Builds 100 decision trees, each trained on a random subset of rows and features
-- Final prediction is the average probability across all 100 trees
+- Builds 200 decision trees, each trained on a random subset of rows and features
+- Final prediction is the average probability across all 200 trees
 - `class_weight="balanced"` — handles imbalance
+- `max_depth=15` — allows deeper trees for more expressive patterns
+- `min_samples_leaf=10` — prevents overfitting on rare patient groups
 - `n_jobs=-1` — uses all CPU cores to train in parallel (faster)
 - Pros: handles non-linear relationships, robust to outliers, less prone to overfitting than a single tree
 - Cons: slower than logistic regression, less interpretable
 
-### Model 3: Gradient Boosting
+### Model 3: Gradient Boosting (Final Model)
 ```python
-GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, random_state=42)
+GradientBoostingClassifier(n_estimators=500, learning_rate=0.03, max_depth=4,
+                           subsample=0.8, min_samples_leaf=20, random_state=42)
 ```
-- Also builds decision trees, but **sequentially** — each new tree specifically corrects the errors made by all previous trees
-- `learning_rate=0.1` — each tree's contribution is scaled down by 10%, preventing any single tree from dominating
-- Generally the strongest performer on tabular (structured) data
-- Pros: typically best accuracy on structured data, good probability calibration
-- Cons: slower to train, no built-in class_weight (imbalance handled by the probability output)
+- Builds decision trees **sequentially** — each new tree specifically corrects the errors made by all previous trees
+- `n_estimators=500` — more trees allow finer correction of errors
+- `learning_rate=0.03` — slower learning rate paired with more trees gives better generalization
+- `max_depth=4` — moderately deep trees capture complex patterns without overfitting
+- `subsample=0.8` — each tree trained on 80% of rows (random sampling), reduces overfitting
+- `min_samples_leaf=20` — prevents trees from fitting to tiny, unrepresentative patient groups
+- Pros: typically best accuracy on structured tabular data, good probability calibration
+- Cons: slower to train, no built-in class_weight (imbalance handled by probability output and threshold)
 
 ### Results from our run:
 
 | Model | Average Precision | ROC-AUC | Brier Score |
 |---|---|---|---|
-| Logistic Regression | 0.1963 | 0.6581 | 0.2302 |
-| Random Forest | 0.1813 | 0.6401 | 0.1110 |
-| **Gradient Boosting** | **0.2025** | **0.6612** | **0.0953** |
+| Logistic Regression | 0.1990 | 0.6599 | 0.2294 |
+| Random Forest | 0.2067 | 0.6672 | 0.2024 |
+| **Gradient Boosting** | **0.2266** | **0.6728** | **0.0942** |
 
 **Winner: Gradient Boosting** — best on all three metrics.
 
@@ -394,15 +417,15 @@ In a medical context, **missing a high-risk patient (low Recall) is worse** than
 
 **Result from our run:**
 ```
-Chosen threshold: 0.13  (best F1 = 0.273)
+Chosen threshold: 0.15  (best F1 = 0.280)
 
-At threshold 0.13:
-  Early <30:  Precision=0.18  Recall=0.54  F1=0.27
-  No early:   Precision=0.92  Recall=0.70  F1=0.79
-  Accuracy: 68%
+At threshold 0.15:
+  Early <30:  Precision=0.21  Recall=0.40  F1=0.28
+  No early:   Precision=0.92  Recall=0.82  F1=0.86
+  Accuracy: 77%
 ```
 
-We catch **54% of actual high-risk patients**. Precision of 0.18 means roughly 1 in 5 patients we flag actually gets readmitted — acceptable in healthcare where the cost of missing a high-risk patient is much higher than giving extra follow-up to someone who didn't need it.
+We catch **40% of actual high-risk patients**. Precision of 0.21 means roughly 1 in 5 patients we flag actually gets readmitted — acceptable in healthcare where the cost of missing a high-risk patient is much higher than giving extra follow-up to someone who didn't need it. The threshold shifted from 0.13 to 0.15 compared to the baseline model, reflecting better-calibrated probability outputs from the tuned GBM.
 
 ---
 
@@ -414,33 +437,33 @@ We report **Average Precision** per subgroup because it accounts for both rankin
 
 ### By Age:
 ```
-[0-10)    n=28,    AP=0.077  ← very few samples, unreliable
-[10-20)   n=127,   AP=0.192
-[20-30)   n=214,   AP=0.328
-[30-40)   n=611,   AP=0.352
-[40-50)   n=1478,  AP=0.322
-[50-60)   n=2700,  AP=0.157
-[60-70)   n=3506,  AP=0.184
-[70-80)   n=4121,  AP=0.188
-[80-90)   n=2582,  AP=0.188
-[90-100)  n=387,   AP=0.164
+[0-10)    n=28,    AP=0.067  ← very few samples, unreliable
+[10-20)   n=127,   AP=0.232
+[20-30)   n=214,   AP=0.405
+[30-40)   n=611,   AP=0.348
+[40-50)   n=1478,  AP=0.357
+[50-60)   n=2700,  AP=0.198
+[60-70)   n=3506,  AP=0.210
+[70-80)   n=4121,  AP=0.199
+[80-90)   n=2582,  AP=0.224
+[90-100)  n=387,   AP=0.178
 ```
-Model performs best for ages 30–50, weakest for very young and elderly. The very young group (n=28) is too small to draw conclusions from.
+Model performs best for ages 20–50, weakest for very young and elderly. The very young group (n=28) is too small to draw conclusions from. Elderly patients (70+) make up the majority of the dataset but show consistently lower AP — the model is less reliable for this group despite them being the most common patients.
 
 ### By Race:
 ```
-AfricanAmerican  n=3001,  AP=0.220
-Caucasian        n=11809, AP=0.194
-Hispanic         n=328,   AP=0.385
-Asian            n=88,    AP=0.306
-Other            n=178,   AP=0.144
+AfricanAmerican  n=3001,  AP=0.230
+Caucasian        n=11809, AP=0.223
+Hispanic         n=328,   AP=0.415
+Asian            n=88,    AP=0.330
+Other            n=178,   AP=0.213
 ```
-Hispanic and Asian show higher AP but have very small sample sizes — interpret carefully. AfricanAmerican vs Caucasian gap is small (0.220 vs 0.194).
+Hispanic and Asian show higher AP but have very small sample sizes (328 and 88) — interpret with caution, results may not be statistically reliable. AfricanAmerican vs Caucasian gap is small (0.230 vs 0.223) — no major fairness concern between the two largest groups.
 
 ### By Gender:
 ```
-Female  n=8301,  AP=0.194
-Male    n=7453,  AP=0.214
+Female  n=8301,  AP=0.217
+Male    n=7453,  AP=0.239
 ```
 Small difference — not a major concern.
 
@@ -451,7 +474,7 @@ Small difference — not a major concern.
 | File | Contents | Why |
 |---|---|---|
 | `model/pipeline.joblib` | Full fitted pipeline (preprocessor + model) | So predict.py can load and use it on new data |
-| `threshold.json` | `{"threshold": 0.13}` | Instructor applies this to predictions on held-out set |
+| `threshold.json` | `{"threshold": 0.15}` | Instructor applies this to predictions on held-out set |
 | `model/feature_meta.json` | Lists of numeric and categorical column names | Reference for predict.py |
 | `diabetes_clean.csv` | Cleaned and engineered feature matrix | For inspection and notebook use only |
 

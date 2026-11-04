@@ -10,7 +10,10 @@
     "number_inpatient",
     "number_diagnoses",
     "n_meds_changed",
-    "n_meds_steady"
+    "n_meds_steady",
+    "a1c_tested",
+    "glucose_tested",
+    "a1c_abnormal"
   ],
   "categorical": [
     "race",

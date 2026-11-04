@@ -174,6 +174,9 @@ NUMERIC_COLS = [
     "number_diagnoses",
     "n_meds_changed",    # engineered
     "n_meds_steady",     # engineered
+    "a1c_tested",       
+    "glucose_tested",   
+    "a1c_abnormal",     
 ]
 
 # Final column order matching original dataset (minus dropped columns)
@@ -192,6 +195,7 @@ FEATURE_COLS = [
     "glimepiride-pioglitazone", "metformin-rosiglitazone", "metformin-pioglitazone",
     "change", "diabetesMed",
     "n_meds_changed", "n_meds_steady",  # engineered features at end
+    "a1c_tested", "glucose_tested", "a1c_abnormal",
 ]
 
 
@@ -256,12 +260,16 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     # Fill missing medical_specialty explicitly before pipeline sees it
     df["medical_specialty"] = df["medical_specialty"].fillna("Unknown")
 
+    df["a1c_tested"]      = df["A1Cresult"].notna().astype(int)
+    df["glucose_tested"]  = df["max_glu_serum"].notna().astype(int)
+    df["a1c_abnormal"]    = (df["A1Cresult"].isin([">7", ">8"])).astype(int)
+
     return df[FEATURE_COLS]
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="../diabetes_dev.csv")
+    ap.add_argument("--data", default="C:/Users/User/OneDrive/Desktop/ds_assignment2/diabetes_dev.csv")
     args = ap.parse_args()
 
     # ── 1. Load ───────────────────────────────────────────────────────────────
@@ -319,14 +327,22 @@ if __name__ == "__main__":
         ("cat", categorical_transformer, CATEGORICAL_COLS),
     ], remainder="drop")
 
+
     # ── Compare 3 models ──────────────────────────────────────────────────────
     models = {
         "LogisticRegression": LogisticRegression(
-            class_weight="balanced", max_iter=1000, random_state=42),
+            class_weight="balanced", max_iter=2000, random_state=42),
         "RandomForest": RandomForestClassifier(
-            n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1),
+            n_estimators=200, class_weight="balanced", max_depth=15,
+            min_samples_leaf=10, random_state=42, n_jobs=-1),
         "GradientBoosting": GradientBoostingClassifier(
-            n_estimators=100, learning_rate=0.1, random_state=42),
+            n_estimators=500,      # up from 300
+            learning_rate=0.03,    # slower learning to match more trees
+            max_depth=4,
+            subsample=0.8,
+            min_samples_leaf=20,   # prevent overfitting
+            random_state=42
+        ),
     }
 
     results = {}
